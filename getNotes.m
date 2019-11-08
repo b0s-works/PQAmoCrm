@@ -133,42 +133,33 @@ in
 
 
         expandNoteType = Table.ExpandTableColumn(addColumnTypeOfElement, "NoteType", {"name"}, {"NoteType.name"}),
-   delFinal = Table.RemoveColumns(expandNoteType,{"created_user_id", "responsible_user_id", "group_id", "note_type", "element_type"}),
-    #"Разделить столбец по разделителю" = Table.SplitColumn(delFinal, "text", Splitter.SplitTextByDelimiter(""",""", QuoteStyle.None), {"text.1", "text.2", "text.3", "text.4"}),
-    #"Разделить столбец по разделителю1" = Table.SplitColumn(#"Разделить столбец по разделителю", "text.2", Splitter.SplitTextByDelimiter(""":""", QuoteStyle.None), {"text.2.1", "STATUS_OLD"}),
-    #"Разделить столбец по разделителю2" = Table.SplitColumn(#"Разделить столбец по разделителю1", "text.1", Splitter.SplitTextByDelimiter(""":""", QuoteStyle.None), {"text.1.1", "STATUS_NEW"}),
-    #"Разделить столбец по разделителю3" = Table.SplitColumn(#"Разделить столбец по разделителю2", "text.3", Splitter.SplitTextByDelimiter(""":""", QuoteStyle.None), {"text.3.1", "text.3.2"}),
-    #"Разделить столбец по разделителю4" = Table.SplitColumn(#"Разделить столбец по разделителю3", "text.4", Splitter.SplitTextByDelimiter(",""", QuoteStyle.None), {"text.4.1", "text.4.2", "text.4.3"}),
-    #"Разделить столбец по разделителю5" = Table.SplitColumn(#"Разделить столбец по разделителю4", "text.4.3", Splitter.SplitTextByDelimiter(""":", QuoteStyle.None), {"text.4.3.1", "LOSS_REASON_ID"}),
-    #"Замененное значение" = Table.ReplaceValue(#"Разделить столбец по разделителю5","}","",Replacer.ReplaceText,{"LOSS_REASON_ID"}),
-    #"Разделить столбец по разделителю6" = Table.SplitColumn(#"Замененное значение", "text.4.2", Splitter.SplitTextByDelimiter(""":", QuoteStyle.None), {"text.4.2.1", "PIPELINE_ID_NEW"}),
-    #"Разделить столбец по разделителю7" = Table.SplitColumn(#"Разделить столбец по разделителю6", "text.4.1", Splitter.SplitTextByDelimiter(""":", QuoteStyle.None), {"text.4.1.1", "PIPELINE_ID_OLD"}),
-    #"Добавлен пользовательский объект" = Table.AddColumn(#"Разделить столбец по разделителю7", "Text", each if [NoteType.name] = "DEAL_STATUS_CHANGED" then [text.3.2] else [text.1.1]),
-    finaldel1 = Table.RemoveColumns(#"Добавлен пользовательский объект",{"text.1.1", "text.2.1", "text.3.1", "text.3.2", "text.4.1.1", "text.4.2.1", "text.4.3.1"}),
-        mergeWithStatusNew = Table.NestedJoin(
-           finaldel1,{"STATUS_NEW"},
-             statusesChangeType,{"id"},
-            "NewStatus",JoinKind.LeftOuter),
+    шаг1 = Table.RemoveColumns(expandNoteType,{"created_user_id", "responsible_user_id", "group_id", "note_type", "element_type"}), /*#"Разделить столбец по разделителю"*/
 
-        mergeWithStatusOld = Table.NestedJoin(
-           mergeWithStatusNew,{"STATUS_OLD"},
-             statusesChangeType,{"id"},
-            "OldStatus",JoinKind.LeftOuter),
+    шаг2 = Table.RenameColumns(шаг1, {"text", "textOriginal"}), /*Переименование колонки, что бы не было конфликта с будущей колонкой Text*/
+    шаг3 = Table.DuplicateColumn(шаг2, "textOriginal", "textJSON"),  /*Дубликация колонки в колнку textJSON которая позже будет использована для обработки JSON в ней*/
+    шаг4 = Table.TransformColumns(шаг3, {{"textJSON",  each if Text.Contains(_, "{""") then Json.Document(_) else null }}), /*#"Если textJSON содержит JSON тогда обработать JSON и записать результат в неё"*/
+    шаг5 = Table.ExpandRecordColumn(шаг4, "textJSON", {"STATUS_NEW", "STATUS_OLD", "TEXT", "PIPELINE_ID_OLD", "PIPELINE_ID_NEW", "LOSS_REASON_ID", "HTML"}, {"STATUS_NEW", "STATUS_OLD", "TEXTFROMJSON", "PIPELINE_ID_OLD", "PIPELINE_ID_NEW", "LOSS_REASON_ID", "HTML"}), /*#"Извлечь из JSON записей поля и добавить их как колонки"*/
+    //шаг6 = Table.AddColumn(шаг5, "Text", each if [NoteType.name] = "DEAL_STATUS_CHANGED" then [TEXTFROMJSON] else if Text.Contains([textOriginal], "{""") then if [HTML] <> null then Table.First(Html.Table([HTML], {{"link", "a[href^=""http""]", each [Attributes][href]}}), "link")[link] else if [TEXT] <> null then [TEXT] else [textOriginal] else [textOriginal]),
+    //шаг6 = Table.AddColumn(шаг5, "Text", each if [NoteType.name] = "DEAL_STATUS_CHANGED" then [TEXTFROMJSON] else if Text.Contains([textOriginal], "{""") then if [HTML] <> null then [HTML] else if [TEXT] <> null then [TEXT] else [textOriginal] else [textOriginal]),
+    шаг6 = Table.AddColumn(шаг5, "Text", each if [NoteType.name] = "DEAL_STATUS_CHANGED" then [TEXTFROMJSON] else if Text.Contains([textOriginal], "{""") then if [TEXTFROMJSON] <> null then [TEXTFROMJSON] else [textOriginal] else [textOriginal]),
+    
+    /*Изменениее типа колонок на тестовый, необходимое, для удачного сравнения полей в последующем вызове Table.NestedJoin*/
+    шаг7  = Table.TransformColumnTypes(шаг6,{{"STATUS_NEW", type text}}),
+    шаг8  = Table.TransformColumnTypes(шаг7,{{"STATUS_OLD", type text}}),
+    шаг9  = Table.TransformColumnTypes(шаг8,{{"PIPELINE_ID_NEW", type text}}),
+    шаг10  = Table.TransformColumnTypes(шаг9,{{"PIPELINE_ID_OLD", type text}}),
 
-        mergeWithOldPipeline = Table.NestedJoin(
-           mergeWithStatusOld,{"PIPELINE_ID_OLD"},
-             pipelinesChangeType,{"id"},
-            "OldPipeline",JoinKind.LeftOuter),
 
-        mergeWithNewPipeline = Table.NestedJoin(
-           mergeWithOldPipeline,{"PIPELINE_ID_NEW"},
-             pipelinesChangeType,{"id"},
-            "NewPipeline",JoinKind.LeftOuter),
+    mergeWithStatusNew = Table.NestedJoin(шаг10,{"STATUS_NEW"}, statusesChangeType,{"id"}, "NewStatus",JoinKind.LeftOuter),
+    mergeWithStatusOld = Table.NestedJoin(mergeWithStatusNew,{"STATUS_OLD"}, statusesChangeType,{"id"}, "OldStatus",JoinKind.LeftOuter),
+    mergeWithOldPipeline = Table.NestedJoin(mergeWithStatusOld,{"PIPELINE_ID_OLD"}, pipelinesChangeType,{"id"}, "OldPipeline",JoinKind.LeftOuter), 
+    mergeWithNewPipeline = Table.NestedJoin(mergeWithOldPipeline,{"PIPELINE_ID_NEW"}, pipelinesChangeType,{"id"}, "NewPipeline",JoinKind.LeftOuter),
+
     #"Развернутый элемент NewStatus" = Table.ExpandTableColumn(mergeWithNewPipeline, "NewStatus", {"name"}, {"NewStatus.name"}),
     #"Развернутый элемент OldStatus" = Table.ExpandTableColumn(#"Развернутый элемент NewStatus", "OldStatus", {"name"}, {"OldStatus.name"}),
     #"Развернутый элемент OldPipeline" = Table.ExpandTableColumn(#"Развернутый элемент OldStatus", "OldPipeline", {"name"}, {"OldPipeline.name"}),
     #"Развернутый элемент NewPipeline" = Table.ExpandTableColumn(#"Развернутый элемент OldPipeline", "NewPipeline", {"name"}, {"NewPipeline.name"}),
-    finaldel2 = Table.RemoveColumns(#"Развернутый элемент NewPipeline",{"STATUS_NEW", "STATUS_OLD", "PIPELINE_ID_OLD", "PIPELINE_ID_NEW"})
+    finaldel2 = Table.RemoveColumns(#"Развернутый элемент NewPipeline",{"STATUS_NEW", "STATUS_OLD", "PIPELINE_ID_OLD", "PIPELINE_ID_NEW", "textOriginal", "HTML", "TEXTFROMJSON"})
 in
     finaldel2
 in
